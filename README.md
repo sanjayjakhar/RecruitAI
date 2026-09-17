@@ -1,5 +1,12 @@
 # 🤖 AI-Powered Recruitment Agent (RecruitAI)
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-hr--agent--rho.vercel.app-FF6B35?style=for-the-badge&logo=vercel&logoColor=white)](https://hr-agent-rho.vercel.app)
+[![Vercel Status](https://img.shields.io/badge/Deployment-Live%20%26%20Active-10B981?style=for-the-badge&logo=vercel&logoColor=white)](https://hr-agent-rho.vercel.app)
+[![Tech Stack](https://img.shields.io/badge/Stack-Next.js%20%7C%20Groq%20%7C%20PostgreSQL-6366F1?style=for-the-badge)](https://github.com/sanjayjakhar/RecruitAI)
+
+> 🌐 **Live Demo Website:** [https://hr-agent-rho.vercel.app](https://hr-agent-rho.vercel.app)  
+> 🔗 **Direct Vercel Domain:** [https://hr-agent-d7m3c68z6-sanjayjakhars-projects.vercel.app](https://hr-agent-d7m3c68z6-sanjayjakhars-projects.vercel.app)
+
 A full-stack, AI-powered hiring platform that automates resume screening, candidate evaluation, interview scheduling, and recruitment reporting. Built with a modern 2026 SaaS aesthetic featuring vibrant light-orange sunset accents, multi-color category badges, ambient aurora mesh gradients, and interactive micro-animations.
 
 ---
