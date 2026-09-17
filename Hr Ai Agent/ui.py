@@ -3,6 +3,7 @@ from groq import Groq
 import PyPDF2
 import os
 import smtplib
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -12,105 +13,143 @@ from googleapiclient.discovery import build
 import pickle
 import io
 import time
+from dotenv import load_dotenv
 
 # ── CONFIG ─────────────────────────────────────────
-API_KEY      = "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"
-client       = Groq(api_key=API_KEY)
-GMAIL        = "ankitkumar925630@gmail.com"
-APP_PASSWORD = "vvnotgluuhutvkin"
+current_dir = Path(__file__).resolve().parent
+load_dotenv(current_dir / ".env")
+load_dotenv(current_dir.parent / ".env")
+load_dotenv(current_dir.parent / ".env.local")
+
+API_KEY      = os.getenv("GROQ_API_KEY")
+client       = Groq(api_key=API_KEY) if API_KEY else None
+GMAIL        = os.getenv("GMAIL") or os.getenv("SMTP_EMAIL", "")
+APP_PASSWORD = os.getenv("APP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
 SCOPES       = ["https://www.googleapis.com/auth/calendar"]
+
+TOKEN_PATH   = os.getenv("GOOGLE_TOKEN_PATH", str(current_dir / "token.pickle"))
+CREDS_PATH   = os.getenv("GOOGLE_CREDENTIALS_PATH", str(current_dir / "credentials.json"))
 
 st.set_page_config(page_title="HR AI Agent", page_icon="🤖", layout="wide")
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-* { font-family: 'Inter', sans-serif; }
-
-.main { background: #f1f5f9; }
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"] {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+}
+.main {
+    background: radial-gradient(circle at 10% 10%, rgba(193, 232, 255, 0.45) 0%, transparent 45%),
+                radial-gradient(circle at 90% 90%, rgba(125, 160, 202, 0.25) 0%, transparent 45%),
+                #f5f9fd;
+}
 
 .hero {
-    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
-    border-radius: 20px;
-    padding: 40px;
+    background: linear-gradient(135deg, #021024 0%, #052659 50%, #FF6B35 100%);
+    border-radius: 22px;
+    padding: 42px 28px;
     text-align: center;
     margin-bottom: 28px;
-    box-shadow: 0 20px 40px rgba(37,99,235,0.3);
+    box-shadow: 0 20px 45px rgba(255, 107, 53, 0.22);
+    border: 1px solid rgba(255, 174, 107, 0.3);
+    position: relative;
+    overflow: hidden;
 }
-.hero h1 { color: white; font-size: 36px; font-weight: 700; margin: 0; }
-.hero p  { color: #bfdbfe; font-size: 16px; margin: 8px 0 0; }
+.hero h1 { color: #ffffff; font-size: 38px; font-weight: 800; margin: 0; letter-spacing: -0.5px; }
+.hero p  { color: #C1E8FF; font-size: 16px; margin: 10px 0 0; font-weight: 500; }
 
 .step-bar {
-    background: white;
-    border-radius: 16px;
-    padding: 20px 28px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 18px;
+    padding: 18px 24px;
     margin-bottom: 24px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    box-shadow: 0 4px 20px rgba(5, 38, 89, 0.06);
+    border: 1px solid rgba(125, 160, 202, 0.3);
+    backdrop-filter: blur(10px);
 }
 
 .card {
-    background: white;
-    border-radius: 16px;
-    padding: 28px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-    border: 1px solid #e2e8f0;
+    background: rgba(255, 255, 255, 0.96);
+    border-radius: 20px;
+    padding: 30px;
+    margin-bottom: 22px;
+    box-shadow: 0 8px 32px rgba(5, 38, 89, 0.08);
+    border: 1px solid rgba(125, 160, 202, 0.3);
+    backdrop-filter: blur(14px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     animation: fadeIn 0.4s ease;
+}
+.card:hover {
+    box-shadow: 0 16px 40px rgba(5, 38, 89, 0.14);
+    border-color: #5483B3;
 }
 @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
 
 .candidate-strong {
-    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
-    border: 1px solid #86efac;
-    border-radius: 12px;
-    padding: 16px 20px;
+    background: linear-gradient(135deg, #f0fdf4, #e8f4fc);
+    border: 1.5px solid #5483B3;
+    border-radius: 14px;
+    padding: 18px 22px;
     margin-bottom: 12px;
+    box-shadow: 0 4px 16px rgba(84, 131, 179, 0.12);
+    transition: all 0.25s ease;
     animation: slideIn 0.3s ease;
+}
+.candidate-strong:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(5, 38, 89, 0.16);
 }
 .candidate-maybe {
-    background: linear-gradient(135deg, #fffbeb, #fef3c7);
-    border: 1px solid #fcd34d;
-    border-radius: 12px;
-    padding: 16px 20px;
+    background: linear-gradient(135deg, #fffbeb, #f0f9ff);
+    border: 1.5px solid #7DA0CA;
+    border-radius: 14px;
+    padding: 18px 22px;
     margin-bottom: 12px;
+    box-shadow: 0 4px 16px rgba(125, 160, 202, 0.12);
+    transition: all 0.25s ease;
     animation: slideIn 0.3s ease;
 }
+.candidate-maybe:hover { transform: translateY(-2px); }
+
 .candidate-reject {
-    background: linear-gradient(135deg, #fef2f2, #fee2e2);
+    background: linear-gradient(135deg, #fef2f2, #fff1f2);
     border: 1px solid #fca5a5;
-    border-radius: 12px;
-    padding: 16px 20px;
+    border-radius: 14px;
+    padding: 18px 22px;
     margin-bottom: 12px;
+    transition: all 0.25s ease;
     animation: slideIn 0.3s ease;
 }
+.candidate-reject:hover { transform: translateY(-2px); }
 @keyframes slideIn { from { opacity:0; transform:translateX(-10px); } to { opacity:1; transform:none; } }
 
 .stat-card {
-    background: white;
-    border-radius: 14px;
-    padding: 20px;
+    background: linear-gradient(180deg, #ffffff 0%, #F4FAFF 100%);
+    border-radius: 16px;
+    padding: 22px 16px;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-    border: 1px solid #e2e8f0;
-    transition: transform 0.2s;
+    box-shadow: 0 4px 18px rgba(5, 38, 89, 0.06);
+    border: 1.5px solid rgba(125, 160, 202, 0.3);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.stat-card:hover { transform: translateY(-2px); }
-.stat-num   { font-size: 36px; font-weight: 700; }
-.stat-label { font-size: 13px; color: #64748b; margin-top: 4px; font-weight: 500; }
+.stat-card:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(5, 38, 89, 0.14);
+    border-color: #5483B3;
+}
+.stat-num   { font-size: 38px; font-weight: 800; color: #052659; }
+.stat-label { font-size: 13px; color: #3B6B9B; margin-top: 6px; font-weight: 600; }
 
 .rank-badge {
     display: inline-block;
-    background: linear-gradient(135deg, #2563eb, #3b82f6);
-    color: white;
+    background: linear-gradient(135deg, #052659, #5483B3);
+    color: #C1E8FF;
     border-radius: 50%;
-    width: 32px; height: 32px;
-    text-align: center; line-height: 32px;
+    width: 34px; height: 34px;
+    text-align: center; line-height: 34px;
     font-weight: 700; font-size: 14px;
-    margin-right: 10px;
+    margin-right: 12px;
+    box-shadow: 0 4px 12px rgba(5, 38, 89, 0.3);
 }
 
 .score-pill {
@@ -122,29 +161,30 @@ st.markdown("""
 }
 
 .section-title {
-    font-size: 20px;
-    font-weight: 700;
-    color: #1e293b;
-    margin: 20px 0 14px;
+    font-size: 21px;
+    font-weight: 800;
+    color: #021024;
+    margin: 22px 0 16px;
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
 .stButton>button {
-    background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
-    color: white !important;
+    background: linear-gradient(135deg, #FF6B35 0%, #FF8A3D 50%, #FFA94D 100%) !important;
+    color: #ffffff !important;
     border: none !important;
-    border-radius: 10px !important;
-    padding: 10px 24px !important;
-    font-weight: 600 !important;
+    border-radius: 14px !important;
+    padding: 12px 28px !important;
+    font-weight: 800 !important;
     font-size: 15px !important;
-    transition: all 0.2s !important;
-    box-shadow: 0 4px 12px rgba(37,99,235,0.3) !important;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: 0 8px 24px rgba(255, 107, 53, 0.35) !important;
 }
 .stButton>button:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 6px 16px rgba(37,99,235,0.4) !important;
+    transform: translateY(-2px) scale(1.02) !important;
+    box-shadow: 0 14px 32px rgba(255, 107, 53, 0.5) !important;
+    filter: brightness(1.06) !important;
 }
 
 .success-banner {
@@ -168,15 +208,19 @@ st.markdown("""
 }
 
 .interview-slot {
-    background: linear-gradient(135deg, #eff6ff, #dbeafe);
-    border: 1px solid #93c5fd;
-    border-radius: 10px;
-    padding: 10px 14px;
+    background: linear-gradient(135deg, #F4FAFF, #C1E8FF);
+    border: 1.5px solid #7DA0CA;
+    border-radius: 12px;
+    padding: 10px 16px;
     font-size: 13px;
-    color: #1e40af;
-    font-weight: 500;
-    margin-top: 6px;
+    color: #052659;
+    font-weight: 600;
+    margin-top: 8px;
     display: inline-block;
+}
+
+div[data-testid="stProgress"] > div { border-radius: 10px !important; }
+</style>;
 }
 
 div[data-testid="stProgress"] > div { border-radius: 10px !important; }
@@ -255,16 +299,20 @@ def send_email(to_email, name, role, slot_display):
 
 def get_calendar_service():
     creds = None
-    if os.path.exists("token.pickle"):
-        with open("token.pickle","rb") as t: creds = pickle.load(t)
+    if os.path.exists(TOKEN_PATH):
+        with open(TOKEN_PATH, "rb") as t:
+            creds = pickle.load(t)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow  = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            if not os.path.exists(CREDS_PATH):
+                raise FileNotFoundError(f"OAuth credentials not found at: {CREDS_PATH}")
+            flow = InstalledAppFlow.from_client_secrets_file(CREDS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open("token.pickle","wb") as t: pickle.dump(creds, t)
-    return build("calendar","v3",credentials=creds)
+        with open(TOKEN_PATH, "wb") as t:
+            pickle.dump(creds, t)
+    return build("calendar", "v3", credentials=creds)
 
 def schedule_calendar(service, name, email, role, dt_start):
     dt_end = dt_start + timedelta(hours=1)

@@ -1,6 +1,8 @@
 streamlit
+groq
+python-dotenv
+PyPDF2
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
-openai   # or anthropic, depending on what you use

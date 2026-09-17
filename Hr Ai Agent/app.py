@@ -1,39 +1,55 @@
-from groq import Groq
-import PyPDF2
 import os
 import smtplib
+import pickle
+from pathlib import Path
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+
+from dotenv import load_dotenv
+from groq import Groq
+import PyPDF2
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import pickle
 
-# ── API KEYS ──────────────────────────────────────
-API_KEY = "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"
-client = Groq(api_key=API_KEY)
+# ── LOAD ENVIRONMENT VARIABLES ─────────────────────
+current_dir = Path(__file__).resolve().parent
+load_dotenv(current_dir / ".env")
+load_dotenv(current_dir.parent / ".env")
+load_dotenv(current_dir.parent / ".env.local")
 
-GMAIL        = "ankitkumar925630@gmail.com"
-APP_PASSWORD = "vvnotgluuhutvkin"
+API_KEY      = os.getenv("GROQ_API_KEY")
+GMAIL        = os.getenv("GMAIL") or os.getenv("SMTP_EMAIL", "")
+APP_PASSWORD = os.getenv("APP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
 SCOPES       = ["https://www.googleapis.com/auth/calendar"]
+
+TOKEN_PATH   = os.getenv("GOOGLE_TOKEN_PATH", str(current_dir / "token.pickle"))
+CREDS_PATH   = os.getenv("GOOGLE_CREDENTIALS_PATH", str(current_dir / "credentials.json"))
+
+if not API_KEY:
+    print("❌ ERROR: GROQ_API_KEY is not set!")
+    print("Please set GROQ_API_KEY in Hr Ai Agent/.env")
+    exit(1)
+
+client = Groq(api_key=API_KEY)
 
 # ── GOOGLE CALENDAR AUTH ───────────────────────────
 def get_calendar_service():
     creds = None
-    if os.path.exists("token.pickle"):
-        with open("token.pickle", "rb") as token:
+    if os.path.exists(TOKEN_PATH):
+        with open(TOKEN_PATH, "rb") as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
-            )
+            if not os.path.exists(CREDS_PATH):
+                raise FileNotFoundError(f"OAuth credentials not found at: {CREDS_PATH}")
+            flow = InstalledAppFlow.from_client_secrets_file(CREDS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open("token.pickle", "wb") as token:
+        with open(TOKEN_PATH, "wb") as token:
             pickle.dump(creds, token)
     return build("calendar", "v3", credentials=creds)
 
@@ -43,7 +59,7 @@ def parse_resume(pdf_path):
     with open(pdf_path, "rb") as file:
         reader = PyPDF2.PdfReader(file)
         for page in reader.pages:
-            text += page.extract_text()
+            text += page.extract_text() or ""
     return text
 
 # ── AI SCORER ─────────────────────────────────────
@@ -72,21 +88,24 @@ def score_resume(resume_text, job_description):
 
 # ── RESULT PARSER ──────────────────────────────────
 def parse_result(result):
-    data = {"name": "", "email": "", "score": 0, "verdict": "", "reason": ""}
-    for line in result.split("\n"):
-        if line.startswith("Name:"):
-            data["name"] = line.replace("Name:", "").strip()
-        elif line.startswith("Email:"):
-            data["email"] = line.replace("Email:", "").strip()
-        elif line.startswith("Score:"):
+    data = {"name": "Unknown", "email": "", "score": 0, "verdict": "Reject", "reason": ""}
+    for raw_line in result.split("\n"):
+        line = raw_line.replace("**", "").strip()
+        lower_line = line.lower()
+        if lower_line.startswith("name:"):
+            data["name"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("email:"):
+            data["email"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("score:"):
             try:
-                data["score"] = int(line.replace("Score:", "").strip())
+                digits = "".join(filter(str.isdigit, line.split(":", 1)[1]))
+                data["score"] = int(digits[:3]) if digits else 0
             except:
                 data["score"] = 0
-        elif line.startswith("Verdict:"):
-            data["verdict"] = line.replace("Verdict:", "").strip()
-        elif line.startswith("Reason:"):
-            data["reason"] = line.replace("Reason:", "").strip()
+        elif lower_line.startswith("verdict:"):
+            data["verdict"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("reason:"):
+            data["reason"] = line.split(":", 1)[1].strip()
     return data
 
 # ── EMAIL GENERATOR ────────────────────────────────
@@ -115,6 +134,8 @@ def generate_email(name, role, interview_date, interview_time):
 
 # ── EMAIL SENDER ───────────────────────────────────
 def send_email(to_email, candidate_name, role, interview_date, interview_time):
+    if not GMAIL or not APP_PASSWORD:
+        raise ValueError("GMAIL or APP_PASSWORD is not configured in .env")
     email_body = generate_email(candidate_name, role, interview_date, interview_time)
     msg = MIMEMultipart()
     msg["From"]    = GMAIL
@@ -237,144 +258,145 @@ def generate_report(role, job_description, all_pdfs,
 
     # Save to file
     filename = f"HR_Report_{role.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
+    file_path = current_dir / filename
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(report_text)
 
-    return report_text, filename
+    return report_text, str(file_path)
 
 # ══════════════════════════════════════════════════
 #                  MAIN PROGRAM
 # ══════════════════════════════════════════════════
-print("=" * 60)
-print("          HR AI AGENT — Recruitment Pipeline")
-print("=" * 60)
+if __name__ == "__main__":
+    print("=" * 60)
+    print("          HR AI AGENT — Recruitment Pipeline")
+    print("=" * 60)
 
-# Step 1 — Job Description
-print("\nEnter Job Description")
-print("(Type your JD line by line, then type DONE)")
-print("-" * 60)
-lines = []
-while True:
-    line = input()
-    if line.strip().upper() == "DONE":
-        break
-    lines.append(line)
-job_description = "\n".join(lines)
-role = input("\nEnter Role Name (e.g. Python Developer): ").strip()
+    # Step 1 — Job Description
+    print("\nEnter Job Description")
+    print("(Type your JD line by line, then type DONE)")
+    print("-" * 60)
+    lines = []
+    while True:
+        line = input()
+        if line.strip().upper() == "DONE":
+            break
+        lines.append(line)
+    job_description = "\n".join(lines)
+    role = input("\nEnter Role Name (e.g. Python Developer): ").strip()
 
-# Minimum score
-print("\nMinimum shortlist score? (press Enter for default 60):")
-min_score_input = input("Score: ").strip()
-min_score = int(min_score_input) if min_score_input else 60
+    # Minimum score
+    print("\nMinimum shortlist score? (press Enter for default 60):")
+    min_score_input = input("Score: ").strip()
+    min_score = int(min_score_input) if min_score_input else 60
 
-# Step 2 — Resume PDFs
-print("\nPaste resume PDF paths one by one (type DONE when finished):")
-pdf_paths = []
-while True:
-    path = input(f"  Resume {len(pdf_paths)+1} path (or DONE): ").strip().strip('"')
-    if path.upper() == "DONE":
-        break
-    if path.endswith(".pdf") and os.path.exists(path):
-        pdf_paths.append(path)
-        print("   ✅ Resume added!")
-    else:
-        print("   ❌ File not found — try again")
-
-# Step 3 — AI Screening
-print(f"\n[Starting AI screening for {len(pdf_paths)} resumes...]\n")
-results = []
-for i, pdf_path in enumerate(pdf_paths):
-    filename = os.path.basename(pdf_path)
-    print(f"  Scanning {i+1}/{len(pdf_paths)}: {filename}")
-    try:
-        resume_text = parse_resume(pdf_path)
-        result      = score_resume(resume_text, job_description)
-        results.append(result)
-        print(f"  ✅ Done!\n")
-    except Exception as e:
-        print(f"  ❌ Error: {e}\n")
-
-# Step 4 — Shortlist
-shortlisted, rejected = shortlist_candidates(results, min_score)
-
-print("=" * 60)
-print("          SHORTLISTED CANDIDATES")
-print(f"          Minimum Score : {min_score}/100")
-print("=" * 60)
-
-if not shortlisted:
-    print("  No candidates met the minimum score.")
-else:
-    for rank, c in enumerate(shortlisted, 1):
-        print(f"\n  Rank #{rank}")
-        print(f"  Name    : {c['name']}")
-        print(f"  Email   : {c['email']}")
-        print(f"  Score   : {c['score']}/100")
-        print(f"  Verdict : {c['verdict']}")
-        print(f"  Reason  : {c['reason']}")
-        print("  " + "-" * 56)
-
-# Step 5 & 6 — Email + Calendar
-schedule_info = {}
-
-print("\nWould you like to send emails & schedule interviews? (yes/no):")
-send = input("Choice: ").strip().lower()
-
-if send in ["yes", "y"] and shortlisted:
-    print("\nEnter interview date (format: YYYY-MM-DD, e.g. 2025-05-15):")
-    interview_date = input("Date: ").strip()
-    print("Enter interview start time (format: HH:MM, e.g. 10:00):")
-    interview_time = input("Time: ").strip()
-
-    print("\n[Connecting to Google Calendar...]\n")
-    try:
-        cal_service = get_calendar_service()
-        print("  ✅ Google Calendar connected!\n")
-    except Exception as e:
-        print(f"  ❌ Calendar connection failed: {e}")
-        cal_service = None
-
-    for i, c in enumerate(shortlisted):
-        slot_dt = datetime.strptime(
-            f"{interview_date} {interview_time}", "%Y-%m-%d %H:%M"
-        ) + timedelta(hours=i)
-        slot_date    = slot_dt.strftime("%Y-%m-%d")
-        slot_time    = slot_dt.strftime("%H:%M")
-        slot_display = slot_dt.strftime("%d %B %Y at %I:%M %p")
-
-        schedule_info[c["name"]] = slot_display
-
-        print(f"  Processing : {c['name']}")
-        print(f"  Slot       : {slot_display}")
-
-        if c["email"]:
-            try:
-                send_email(c["email"], c["name"], role, slot_display, slot_time)
-                print(f"  ✅ Email sent to {c['email']}")
-            except Exception as e:
-                print(f"  ❌ Email failed: {e}")
+    # Step 2 — Resume PDFs
+    print("\nPaste resume PDF paths one by one (type DONE when finished):")
+    pdf_paths = []
+    while True:
+        path = input(f"  Resume {len(pdf_paths)+1} path (or DONE): ").strip().strip('"')
+        if path.upper() == "DONE":
+            break
+        if path.endswith(".pdf") and os.path.exists(path):
+            pdf_paths.append(path)
+            print("   ✅ Resume added!")
         else:
-            print(f"  ⚠️  No email found in resume")
+            print("   ❌ File not found — try again")
 
-        if cal_service and c["email"]:
-            try:
-                link = schedule_interview(
-                    cal_service, c["name"], c["email"],
-                    role, slot_date, slot_time
-                )
-                print(f"  ✅ Calendar event created!")
-                print(f"  🔗 {link}")
-            except Exception as e:
-                print(f"  ❌ Calendar error: {e}")
-        print()
+    # Step 3 — AI Screening
+    print(f"\n[Starting AI screening for {len(pdf_paths)} resumes...]\n")
+    results = []
+    for i, pdf_path in enumerate(pdf_paths):
+        filename = os.path.basename(pdf_path)
+        print(f"  Scanning {i+1}/{len(pdf_paths)}: {filename}")
+        try:
+            resume_text = parse_resume(pdf_path)
+            result      = score_resume(resume_text, job_description)
+            results.append(result)
+            print(f"  ✅ Done!\n")
+        except Exception as e:
+            print(f"  ❌ Error: {e}\n")
 
-# Step 7 — Final Report
-print("\n[Generating Final HR Report...]\n")
-report_text, filename = generate_report(
-    role, job_description, pdf_paths,
-    shortlisted, rejected, schedule_info
-)
+    # Step 4 — Shortlist
+    shortlisted, rejected = shortlist_candidates(results, min_score)
 
-print(report_text)
-print(f"\n  📄 Report saved as: {filename}")
-print(f"  📁 Location: C:\\Users\\BIT\\Desktop\\Hr Ai Agent\\{filename}")
+    print("=" * 60)
+    print("          SHORTLISTED CANDIDATES")
+    print(f"          Minimum Score : {min_score}/100")
+    print("=" * 60)
+
+    if not shortlisted:
+        print("  No candidates met the minimum score.")
+    else:
+        for rank, c in enumerate(shortlisted, 1):
+            print(f"\n  Rank #{rank}")
+            print(f"  Name    : {c['name']}")
+            print(f"  Email   : {c['email']}")
+            print(f"  Score   : {c['score']}/100")
+            print(f"  Verdict : {c['verdict']}")
+            print(f"  Reason  : {c['reason']}")
+            print("  " + "-" * 56)
+
+    # Step 5 & 6 — Email + Calendar
+    schedule_info = {}
+
+    print("\nWould you like to send emails & schedule interviews? (yes/no):")
+    send = input("Choice: ").strip().lower()
+
+    if send in ["yes", "y"] and shortlisted:
+        print("\nEnter interview date (format: YYYY-MM-DD, e.g. 2025-05-15):")
+        interview_date = input("Date: ").strip()
+        print("Enter interview start time (format: HH:MM, e.g. 10:00):")
+        interview_time = input("Time: ").strip()
+
+        print("\n[Connecting to Google Calendar...]\n")
+        try:
+            cal_service = get_calendar_service()
+            print("  ✅ Google Calendar connected!\n")
+        except Exception as e:
+            print(f"  ❌ Calendar connection failed: {e}")
+            cal_service = None
+
+        for i, c in enumerate(shortlisted):
+            slot_dt = datetime.strptime(
+                f"{interview_date} {interview_time}", "%Y-%m-%d %H:%M"
+            ) + timedelta(hours=i)
+            slot_date    = slot_dt.strftime("%Y-%m-%d")
+            slot_time    = slot_dt.strftime("%H:%M")
+            slot_display = slot_dt.strftime("%d %B %Y at %I:%M %p")
+
+            schedule_info[c["name"]] = slot_display
+
+            print(f"  Processing : {c['name']}")
+            print(f"  Slot       : {slot_display}")
+
+            if c["email"]:
+                try:
+                    send_email(c["email"], c["name"], role, slot_display, slot_time)
+                    print(f"  ✅ Email sent to {c['email']}")
+                except Exception as e:
+                    print(f"  ❌ Email failed: {e}")
+            else:
+                print(f"  ⚠️  No email found in resume")
+
+            if cal_service and c["email"]:
+                try:
+                    link = schedule_interview(
+                        cal_service, c["name"], c["email"],
+                        role, slot_date, slot_time
+                    )
+                    print(f"  ✅ Calendar event created!")
+                    print(f"  🔗 {link}")
+                except Exception as e:
+                    print(f"  ❌ Calendar error: {e}")
+            print()
+
+    # Step 7 — Final Report
+    print("\n[Generating Final HR Report...]\n")
+    report_text, file_path = generate_report(
+        role, job_description, pdf_paths,
+        shortlisted, rejected, schedule_info
+    )
+
+    print(report_text)
+    print(f"\n  📄 Report saved at: {file_path}")

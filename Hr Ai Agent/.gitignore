@@ -1,0 +1,17 @@
+# Secrets & Credentials
+.env
+.env.local
+token.pickle
+credentials.json
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Generated reports
+HR_Report_*.txt
+
+# Streamlit local settings
+.streamlit/
